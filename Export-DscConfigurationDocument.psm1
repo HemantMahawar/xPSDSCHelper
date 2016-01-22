@@ -174,7 +174,7 @@ function New-DscResourceSyntax
         $resourceTypeName = ($ResourceObject.CimClass.CimClassQualifiers | ?{$_.Name -eq 'FriendlyName'}).Value
 
         # If no friendly name, then use class name
-        if(-not $resourceTypeName) $resourceTypeName = $ResourceObject.CimClass.CimClassName
+        if(-not $resourceTypeName) {$resourceTypeName = $ResourceObject.CimClass.CimClassName}
 
         # Handle File resource special
         if($resourceTypeName -eq 'MSFT_FileDirectoryConfiguration'){$resourceTypeName = 'File'}
