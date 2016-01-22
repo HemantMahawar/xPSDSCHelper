@@ -1,9 +1,13 @@
 function Export-xDscConfiguration
 {
+    [CmdletBinding(DefaultParameterSetName)]
     param
     (
-        [Parameter(Mandatory, ValueFromPipeline)]
+        [Parameter(ParameterSetName='ConfigurationObject', Mandatory, ValueFromPipeline)]
         [ciminstance[]]$ConfigurationObject,
+
+        [Parameter(ParameterSetName='ConfigurationDocument', Mandatory, ValueFromPipeline)]
+        [string]$ConfigurationDocumentPath,
 
         [Parameter(Mandatory)]
         [string]$Path,
@@ -11,38 +15,85 @@ function Export-xDscConfiguration
         [switch]$Passthru
     )
 
-    # If it derives from OMI_BaseResource, it contains Real resources
-    if($ConfigurationObject[0].CimClass.CimSuperClassName -eq 'OMI_BaseResource')
+#region input validation
+
+    # If $Path has something before it, check if that exists, if not create it else must be working directory
+    $PathRoot = Split-Path $Path
+    if(($PathRoot -ne ([String]::Empty)) -and (-not (Test-Path -Path $PathRoot)))
     {
+        New-Item -ItemType Directory -Path $PathRoot
+    }
+
+    # if the $PATH file extension is not .ps1, throw
+    if((Split-Path $Path -Leaf).split('.')[1] -ne 'ps1')
+    {
+        Throw 'Only .ps1 files are supported for the -Path parameter'
+    }
+ 
+#endregion
+
+    # TODO: Handle mof from multiple configurations
+
+    # Only find the non-read properties in the helper function
+    $InspectQualifier = $true
+
+    # If we are dealing with output of Get-DscConfiguration cmdlet
+    if($PSCmdlet.ParameterSetName -eq 'ConfigurationObject')
+    {
+        # If it derives from OMI_BaseResource, it contains Real resources
+        if($ConfigurationObject[0].CimClass.CimSuperClassName -eq 'OMI_BaseResource')
+        {
+            $configurationName = $ConfigurationObject[0].ConfigurationName
+        }
+
+        # If it is MSFT_DSCMetaConfiguration, it conatins Meta resource
+        elseif($ConfigurationObject[0].CimClass.CimClassName -eq 'MSFT_DSCMetaConfiguration')
+        {
+            Write-Error -Message 'Not supported. For converting output of Get-DscLocalConfigurationManager, please user Export-xDscLocalConfigurationManager cmdlet'
+        }
+        
+        # Something that code doesn't handle yet
+        else
+        {
+            $ConfigurationObject[0].PSObject.TypeNames
+            throw "Don't know how to handle this type hierarchy"
+        }
+    }
+
+    # If we are dealing with Configuration document (MOF)
+    elseif($PSCmdlet.ParameterSetName -eq 'ConfigurationDocument')
+    {
+        # Resolve any relative path or variable usage
+        $ConfigurationDocumentPath = Resolve-Path $ConfigurationDocumentPath
+
+        # Check if $ConfigurationDocumentPath exist
+        if(-not (Test-Path -Path $ConfigurationDocumentPath))
+        {
+            Throw "$ConfigurationDocumentPath is not a valid path. Please provide correct input and try again"
+        }
+
+        # Get objects from reading the mof file
+        $ConfigurationObject = [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ImportInstances($ConfigurationDocumentPath,4)
+
+        # If the objects have configurationName property, use it else (in PS v4) assign a dummy
         $configurationName = $ConfigurationObject[0].ConfigurationName
-    }
-    
-    # If it is MSFT_DSCMetaConfiguration, it conatins Meta resource
-    elseif($ConfigurationObject[0].CimClass.CimClassName -eq 'MSFT_DSCMetaConfiguration')
-    {
-        Write-Error -Message 'Not supported. For converting output of Get-DscLocalConfigurationManager, please user Export-xDscLocalConfigurationManager cmdlet'
+
+        # Don't filter based on qualifiers, as the objects will not have it
+        $InspectQualifier = $false
     }
 
-    # Something that code doesn't handle yet
-    else
-    {
-        $ConfigurationObject[0].PSObject.TypeNames
-        throw "Don't know how to handle this type hierarchy"
-    }
-
-    if($configurationName -eq $null) {$configurationName = "#Name"}
+    # ConfigurationName will be $null for DSC in PS 4.0
+    if($configurationName -eq $null) {$configurationName = '#Name'}
 
     $output = & {
     "Configuration $configurationName `n{"
         foreach($object in $ConfigurationObject)
         {
-            New-DscResourceSyntax -ResourceObject $object
+            New-DscResourceSyntax -ResourceObject $object -UseQualifier:$InspectQualifier
         }
     "}"
     }
 
-    # TODO: Validate file extension
-    # TODO: Validate folder, if specified and create it
     Set-Content -Value $output -Path $Path
     if($Passthru) {$output}
 }
@@ -100,41 +151,66 @@ function New-DscResourceSyntax
     param
     (
         [Parameter(Mandatory)]
-        [ciminstance]$ResourceObject
+        [ciminstance]$ResourceObject,
+
+        [Switch]$UseQualifier
     )
 
-    # FriendlyName of the class
-    if($ResourceObject.CimClass.CimClassQualifiers['FriendlyName'])
+    # Get the resource ID of the resource
+    $resourceId = ($ResourceObject.CimInstanceProperties | ?{$_.Name -eq 'ResourceId'}).Value
+
+    # If resource ID is found, derive the TypeName and InstanceName from it
+    if($resourceId)
     {
-        $resourceTypeName = $ResourceObject.CimClass.CimClassQualifiers['FriendlyName'].value
+        # Get the resource typename and instance name
+        $resourceTypeName = $resourceId.Split('[]')[1]
+        $resourceInstanceName = $resourceId.Split(']')[1]
     }
-    # If no friendly name, then use class name
-    else
+
+    # If no resource ID, use CimClassQualifiers to find it.
+    # There is no $resourceId in DSC in PS 4.0 and OMI_ConfigurationDocument doesn't have it either
+    if(-not $resourceId)
     {
-        $resourceTypeName = $ResourceObject.CimClass.CimClassName
- 
+        $resourceTypeName = ($ResourceObject.CimClass.CimClassQualifiers | ?{$_.Name -eq 'FriendlyName'}).Value
+
+        # If no friendly name, then use class name
+        if(-not $resourceTypeName) $resourceTypeName = $ResourceObject.CimClass.CimClassName
+
         # Handle File resource special
         if($resourceTypeName -eq 'MSFT_FileDirectoryConfiguration'){$resourceTypeName = 'File'}
+
+        $resourceInstanceName = '#InstanceName'
     }
 
-    # Find list of properties that are not 'Read' properties
-    $resourceClassProperties = $ResourceObject.CimClass.CimClassProperties
-    $resourceProperties = @()
-    $resourceProperties += $resourceClassProperties |?{$_.qualifiers.Name -contains 'key'}
-    $resourceProperties += $resourceClassProperties |?{$_.qualifiers.Name -contains 'required'}
-    $resourceProperties += $resourceClassProperties |?{$_.qualifiers.Name -contains 'write'}
+    # We don't need to include OMI_ConfigurationDocument as user never specify them in authoring
+    if($resourceTypeName -ne 'OMI_ConfigurationDocument')
+    {
+        # Find list of properties that are not 'Read' properties
+        $resourceClassProperties = $ResourceObject.CimClass.CimClassProperties
+        $resourceProperties = @()
 
-    $resourceInstanceName = $ResourceObject.CimInstanceProperties['ResourceId']
-    if($resourceInstanceName -eq $null) {$resourceInstanceName = '#InstanceName'}
-    else{$resourceInstanceName = $resourceInstanceName.Value.Split(']')[1]}
+        # This is needed to not add 'read' properties in the configuration script.
+        # Only applicable in Get-DscConfiguration scenario, not in MOF one 
+        if($UseQualifier)
+        {
+            $resourceProperties += $resourceClassProperties |?{$_.qualifiers.Name -contains 'key'}
+            $resourceProperties += $resourceClassProperties |?{$_.qualifiers.Name -contains 'required'}
+            $resourceProperties += $resourceClassProperties |?{$_.qualifiers.Name -contains 'write'}
+        }
+        else
+        {
+            $resourceProperties = $resourceClassProperties
+        }
 
-    # Properties that user never specifies
-    $propertiesToSkip = 'ConfigurationName','ModuleName','ModuleVersion','PsDscRunAsCredential','ResourceId'
-    $resourceProperties = $resourceProperties | ?{$propertiesToSkip -notcontains $_}
+        # Properties that user never specifies but added by the compiler
+        # TODO: Extract PSDscRunAsCredential from the list and have code for it
+        $propertiesToSkip = 'ConfigurationName','ModuleName','ModuleVersion','PsDscRunAsCredential','ResourceId','SourceInfo'
+        $resourceProperties = $resourceProperties | ?{$propertiesToSkip -notcontains $_}
 
-    "`t$resourceTypeName $resourceInstanceName `n`t{"
-    Get-ResourcePropertiesSyntax -ResourceObject $ResourceObject -ResourceProperties $resourceProperties
-    "`t}`n"
+        "`t$resourceTypeName $resourceInstanceName `n`t{"
+        Get-ResourcePropertiesSyntax -ResourceObject $ResourceObject -ResourceProperties $resourceProperties
+        "`t}`n"
+    }
 }
 
 function New-DscLCMSyntax
