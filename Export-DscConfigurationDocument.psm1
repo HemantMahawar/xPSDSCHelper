@@ -15,88 +15,105 @@ function Export-xDscConfiguration
         [switch]$Passthru
     )
 
-#region input validation
-
-    # If $Path has something before it, check if that exists, if not create it else must be working directory
-    $PathRoot = Split-Path $Path
-    if(($PathRoot -ne ([String]::Empty)) -and (-not (Test-Path -Path $PathRoot)))
-    {
-        New-Item -ItemType Directory -Path $PathRoot
-    }
-
-    # if the $PATH file extension is not .ps1, throw
-    if((Split-Path $Path -Leaf).split('.')[1] -ne 'ps1')
-    {
-        Throw 'Only .ps1 files are supported for the -Path parameter'
-    }
- 
-#endregion
-
     # TODO: Handle mof from multiple configurations
 
-    # Only find the non-read properties in the helper function
-    $InspectQualifier = $true
-
-    # If we are dealing with output of Get-DscConfiguration cmdlet
-    if($PSCmdlet.ParameterSetName -eq 'ConfigurationObject')
+    Begin
     {
-        # If it derives from OMI_BaseResource, it contains Real resources
-        if($ConfigurationObject[0].CimClass.CimSuperClassName -eq 'OMI_BaseResource')
+        #region input validation
+
+        # If $Path has something before it, check if that exists, if not create it else must be working directory
+        $PathRoot = Split-Path $Path
+        if(($PathRoot -ne ([String]::Empty)) -and (-not (Test-Path -Path $PathRoot)))
         {
-            $configurationName = $ConfigurationObject[0].ConfigurationName
+            New-Item -ItemType Directory -Path $PathRoot
         }
 
-        # If it is MSFT_DSCMetaConfiguration, it conatins Meta resource
-        elseif($ConfigurationObject[0].CimClass.CimClassName -eq 'MSFT_DSCMetaConfiguration')
+        # if the $PATH file extension is not .ps1, throw
+        if((Split-Path $Path -Leaf).split('.')[1] -ne 'ps1')
         {
-            Write-Error -Message 'Not supported. For converting output of Get-DscLocalConfigurationManager, please user Export-xDscLocalConfigurationManager cmdlet'
+            Throw 'Only .ps1 files are supported for the -Path parameter'
         }
+
+        #endregion
+    }
+
+    Process
+    {
+        if($PSCmdlet.ParameterSetName -eq 'ConfigurationObject')
+        {
+            # Collect all the elements coming via the pipeline (unraveled) and use in END block
+            # See https://powertoe.wordpress.com/2010/06/18/tackling-the-pipeline-with-advanced-functions
+            $configObject += $ConfigurationObject
+        }
+    }
+
+    End
+    {
+        # If we are dealing with output of Get-DscConfiguration cmdlet
+        if($PSCmdlet.ParameterSetName -eq 'ConfigurationObject')
+        {
+            # If it derives from OMI_BaseResource, it contains Real resources
+            if($configObject[0].CimClass.CimSuperClassName -eq 'OMI_BaseResource')
+            {
+                $configurationName = $configObject[0].ConfigurationName
+            }
+
+            # If it is MSFT_DSCMetaConfiguration, it conatins Meta resource
+            elseif($configObject[0].CimClass.CimClassName -eq 'MSFT_DSCMetaConfiguration')
+            {
+                Write-Error -Message 'Not supported. For converting output of Get-DscLocalConfigurationManager, please user Export-xDscLocalConfigurationManager cmdlet'
+            }
         
-        # Something that code doesn't handle yet
-        else
-        {
-            $ConfigurationObject[0].PSObject.TypeNames
-            throw "Don't know how to handle this type hierarchy"
-        }
-    }
+            # Something that code doesn't handle yet
+            else
+            {
+                $configObject[0].PSObject.TypeNames
+                throw "Don't know how to handle this type hierarchy"
+            }
 
-    # If we are dealing with Configuration document (MOF)
-    elseif($PSCmdlet.ParameterSetName -eq 'ConfigurationDocument')
-    {
-        # Resolve any relative path or variable usage
-        $ConfigurationDocumentPath = Resolve-Path $ConfigurationDocumentPath
-
-        # Check if $ConfigurationDocumentPath exist
-        if(-not (Test-Path -Path $ConfigurationDocumentPath))
-        {
-            Throw "$ConfigurationDocumentPath is not a valid path. Please provide correct input and try again"
+            # Only find the non-read properties in the helper function
+            $InspectQualifier = $true
         }
 
-        # Get objects from reading the mof file
-        $ConfigurationObject = [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ImportInstances($ConfigurationDocumentPath,4)
-
-        # If the objects have configurationName property, use it else (in PS v4) assign a dummy
-        $configurationName = $ConfigurationObject[0].ConfigurationName
-
-        # Don't filter based on qualifiers, as the objects will not have it
-        $InspectQualifier = $false
-    }
-
-    # ConfigurationName will be $null for DSC in PS 4.0
-    if($configurationName -eq $null) {$configurationName = '#Name'}
-
-    $output = & {
-    "Configuration $configurationName"
-    "{"
-        foreach($object in $ConfigurationObject)
+        # If we are dealing with Configuration document (MOF)
+        elseif($PSCmdlet.ParameterSetName -eq 'ConfigurationDocument')
         {
-            Write-DscResourceSyntax -ResourceObject $object -UseQualifier:$InspectQualifier
-        }
-    "}"
-    }
+            # Resolve any relative path or variable usage
+            $ConfigurationDocumentPath = Resolve-Path $ConfigurationDocumentPath
 
-    Set-Content -Value $output -Path $Path
-    if($Passthru) {$output}
+            # Check if $ConfigurationDocumentPath exist
+            if(-not (Test-Path -Path $ConfigurationDocumentPath))
+            {
+                Throw "$ConfigurationDocumentPath is not a valid path. Please provide correct input and try again"
+            }
+
+            # Get objects from reading the mof file
+            $configObject = [Microsoft.PowerShell.DesiredStateConfiguration.Internal.DscClassCache]::ImportInstances($ConfigurationDocumentPath,4)
+
+            # If the objects have configurationName property, use it else (in PS v4) assign a dummy
+            $configurationName = $configObject[0].ConfigurationName
+
+            # Don't filter based on qualifiers, as the objects will not have it
+            $InspectQualifier = $false
+
+        }
+
+        # ConfigurationName will be $null for DSC in PS 4.0
+        if($configurationName -eq $null) {$configurationName = '#Name'}
+
+        $output = & {
+        "Configuration $configurationName"
+        "{"
+            foreach($object in $configObject)
+            {
+                Write-DscResourceSyntax -ResourceObject $object -UseQualifier:$InspectQualifier
+            }
+        "}"
+        }
+
+        Set-Content -Value $output -Path $Path
+        if($Passthru) {$output}
+    }
 }
 
 function Export-xDscLocalConfigurationManager
