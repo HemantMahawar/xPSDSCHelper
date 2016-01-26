@@ -37,11 +37,11 @@ try
 
         if($PSVersionTable.PSVersionTable -like "4.*")
         {
-            It 'has does not have configuration name in the output' {
+            It 'does not have configuration name in the output' {
                 $true
             }
 
-            It 'has does not have resource instance name in the output' {
+            It 'does not have resource instance name in the output' {
                 $true
             }
         }
@@ -96,11 +96,11 @@ try
 
         if($PSVersionTable.PSVersionTable -like "4.*")
         {
-            It 'has does not have configuration name in the output' {
+            It 'does not have configuration name in the output' {
                 $true
             }
 
-            It 'has does not have resource instance name in the output' {
+            It 'does not have resource instance name in the output' {
                 $true
             }
         }
