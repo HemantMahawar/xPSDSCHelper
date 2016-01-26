@@ -86,10 +86,11 @@ function Export-xDscConfiguration
     if($configurationName -eq $null) {$configurationName = '#Name'}
 
     $output = & {
-    "Configuration $configurationName `n{"
+    "Configuration $configurationName"
+    "{"
         foreach($object in $ConfigurationObject)
         {
-            New-DscResourceSyntax -ResourceObject $object -UseQualifier:$InspectQualifier
+            Write-DscResourceSyntax -ResourceObject $object -UseQualifier:$InspectQualifier
         }
     "}"
     }
@@ -135,7 +136,7 @@ function Export-xDscLocalConfigurationManager
     "Configuration #Name `n{"
         foreach($object in $LocalConfigurationManagerObject)
         {
-            New-DscLCMSyntax -LCMObject $object -UseV2Syntax:$IsV2MetaResource
+            Write-DscLCMSyntax -LCMObject $object -UseV2Syntax:$IsV2MetaResource
         }
     "}"
     }
@@ -146,7 +147,7 @@ function Export-xDscLocalConfigurationManager
     if($Passthru) {$output}
 }
 
-function New-DscResourceSyntax
+function Write-DscResourceSyntax
 {
     param
     (
@@ -207,13 +208,14 @@ function New-DscResourceSyntax
         $propertiesToSkip = 'ConfigurationName','ModuleName','ModuleVersion','PsDscRunAsCredential','ResourceId','SourceInfo'
         $resourceProperties = $resourceProperties | ?{$propertiesToSkip -notcontains $_}
 
-        "`t$resourceTypeName $resourceInstanceName `n`t{"
-        Get-ResourcePropertiesSyntax -ResourceObject $ResourceObject -ResourceProperties $resourceProperties
-        "`t}`n"
+        "`t$resourceTypeName $resourceInstanceName"
+        "`t{"
+        Write-ResourcePropertiesSyntax -ResourceObject $ResourceObject -ResourceProperties $resourceProperties
+        "`t}"
     }
 }
 
-function New-DscLCMSyntax
+function Write-DscLCMSyntax
 {
     param
     (
@@ -228,12 +230,13 @@ function New-DscLCMSyntax
     else{$lcmResourceName = 'LocalConfigurationManager'}
 
     #TODO: Handle PartialCfg, *Managers etc
-    "`t$lcmResourceName `n`t{"
-    Get-ResourcePropertiesSyntax -ResourceObject $LCMObject -ResourceProperties $lcmProperties
+    "`t$lcmResourceName"
+    "`t{"
+    Write-ResourcePropertiesSyntax -ResourceObject $LCMObject -ResourceProperties $lcmProperties
     "`t}"
 }
 
-function Get-ResourcePropertiesSyntax
+function Write-ResourcePropertiesSyntax
 {
     param
     (
