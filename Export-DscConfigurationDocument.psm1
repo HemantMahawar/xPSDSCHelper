@@ -10,7 +10,7 @@ function Export-xDscConfiguration
         [string]$ConfigurationDocumentPath,
 
         [Parameter(Mandatory)]
-        [string]$Path,
+        [string]$OutputPath,
 
         [switch]$Passthru
     )
@@ -19,22 +19,8 @@ function Export-xDscConfiguration
 
     Begin
     {
-        #region input validation
-
-        # If $Path has something before it, check if that exists, if not create it else must be working directory
-        $PathRoot = Split-Path $Path
-        if(($PathRoot -ne ([String]::Empty)) -and (-not (Test-Path -Path $PathRoot)))
-        {
-            New-Item -ItemType Directory -Path $PathRoot
-        }
-
-        # if the $PATH file extension is not .ps1, throw
-        if((Split-Path $Path -Leaf).split('.')[1] -ne 'ps1')
-        {
-            Throw 'Only .ps1 files are supported for the -Path parameter'
-        }
-
-        #endregion
+        #Input validation
+        Validate-Path -Path $OutputPath
     }
 
     Process
@@ -61,7 +47,7 @@ function Export-xDscConfiguration
             # If it is MSFT_DSCMetaConfiguration, it conatins Meta resource
             elseif($configObject[0].CimClass.CimClassName -eq 'MSFT_DSCMetaConfiguration')
             {
-                Write-Error -Message 'Not supported. For converting output of Get-DscLocalConfigurationManager, please user Export-xDscLocalConfigurationManager cmdlet'
+                Write-Error -Message 'Input not supported. For converting output of Get-DscLocalConfigurationManager, please user Export-xDscLocalConfigurationManager cmdlet'
             }
         
             # Something that code doesn't handle yet
@@ -95,7 +81,6 @@ function Export-xDscConfiguration
 
             # Don't filter based on qualifiers, as the objects will not have it
             $InspectQualifier = $false
-
         }
 
         # ConfigurationName will be $null for DSC in PS 4.0
@@ -111,7 +96,7 @@ function Export-xDscConfiguration
         "}"
         }
 
-        Set-Content -Value $output -Path $Path
+        Set-Content -Value $output -Path $OutputPath
         if($Passthru) {$output}
     }
 }
@@ -120,48 +105,82 @@ function Export-xDscLocalConfigurationManager
 {
     param
     (
-        [Parameter(Mandatory, ValueFromPipeline)]
-        [ciminstance]$LocalConfigurationManagerObject,
+        [Parameter(ParameterSetName='LCMObject', Mandatory, ValueFromPipeline)]
+        [ciminstance]$LCMObject,
+
+        [Parameter(ParameterSetName='LCMDocument', Mandatory, ValueFromPipeline)]
+        [string]$LCMDocumentPath,
 
         [Parameter(Mandatory)]
-        [string]$Path,
+        [string]$OutputPath,
 
         [switch]$Passthru
     )
 
-    # If it is MSFT_DSCMetaConfiguration, it conatins Meta resource
-    if($LocalConfigurationManagerObject[0].CimClass.CimClassName -eq 'MSFT_DSCMetaConfiguration')
+    Begin
     {
-        $IsV2MetaResource = $LocalConfigurationManagerObject[0].CimClass.CimClassProperties.name -contains 'PartialConfigurations'
+        #Input validation
+        Validate-Path -Path $OutputPath
     }
 
-    # If it derives from OMI_BaseResource, it contains Real resources
-    elseif($InputObject[0].CimClass.CimSuperClassName -eq 'OMI_BaseResource')
+    End
     {
-        Write-Error -Message 'Not supported. For converting output of Get-DscConfiguration, please user Export-xDscConfiguration cmdlet'
-    }
-        
-    # Something that code doesn't handle yet
-    else
-    {
-        $InputObject[0].PSObject.TypeNames
-        throw "Don't know how to handle this type"
-    }
-
-    $output = & {
-    if($IsV2MetaResource){"[DscLocalConfigurationManager()]"}
-    "Configuration #Name `n{"
-        foreach($object in $LocalConfigurationManagerObject)
+        # If it is MSFT_DSCMetaConfiguration, it conatins Meta resource
+        if($LCMObject.CimClass.CimClassName -eq 'MSFT_DSCMetaConfiguration')
         {
-            Write-DscLCMSyntax -LCMObject $object -UseV2Syntax:$IsV2MetaResource
+            $IsV2MetaResource = $LCMObject.CimClass.CimClassProperties.name -contains 'PartialConfigurations'
         }
-    "}"
+
+        # If it derives from OMI_BaseResource, it contains Real resources
+        elseif($LCMObject.CimClass.CimSuperClassName -eq 'OMI_BaseResource')
+        {
+            Write-Error -Message 'Input not supported. For converting output of Get-DscConfiguration, please user Export-xDscConfiguration cmdlet'
+        }
+        
+        # Something that code doesn't handle yet
+        else
+        {
+            $LCMObject.PSObject.TypeNames
+            throw "Don't know how to handle this type"
+        }
+
+        $output = & {
+        if($IsV2MetaResource){"[DscLocalConfigurationManager()]"}
+        "Configuration #Name"
+        "{"
+            foreach($object in $LCMObject)
+            {
+                Write-DscLCMSyntax -LCMObject $object -UseV2Syntax:$IsV2MetaResource
+            }
+        "}"
+        }
+
+        Set-Content -Value $output -Path $OutputPath
+        if($Passthru) {$output}
+    }
+}
+
+function Validate-Path
+{
+    param
+    (
+        [Parameter(Mandatory)]
+        [String]$Path
+    )
+
+    # If $Path has something before it, check if that exists, if not create it else must be working directory
+    $PathRoot = Split-Path $Path
+    if(($PathRoot -ne ([String]::Empty)) -and (-not (Test-Path -Path $PathRoot)))
+    {
+        New-Item -ItemType Directory -Path $PathRoot
     }
 
-    # TODO: Validate file extension
-    # TODO: Validate folder, if specified and create it
-    Set-Content -Value $output -Path $Path
-    if($Passthru) {$output}
+    # if the $PATH file extension is not .ps1, or .psm1 throw
+    $fileExt = (Split-Path $Path -Leaf).split('.')[1]
+    if(($fileExt -ne 'ps1') -and ($fileExt -ne 'psm1'))
+    {
+        Throw 'Only .ps1 or .psm1 files are supported for the -OutputPath parameter'
+    }
 }
 
 function Write-DscResourceSyntax

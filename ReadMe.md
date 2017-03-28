@@ -1,5 +1,4 @@
-Description
---------------
+#Description
 This module implements set of PowerShell Desired State Configuration helper functions to make the experience better, whereever possible. The functions exported are:
 
 ###Export-xDscConfiguration
